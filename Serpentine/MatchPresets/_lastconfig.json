@@ -1,0 +1,1 @@
+{"mapName":"Standard","playerPaths":["Bots/Perpentine/PlayerAI.py","Bots/Jerpentine/PlayerAI.java","Bots/Jerpentine/PlayerAI.java","Bots/Perpentine/PlayerAI.py"],"maxResponseTime":600,"turnLimit":300,"portNumber":4461,"serverTimeout":0,"playerLaunchTypes":["AI","AI","AI","AI"]}
