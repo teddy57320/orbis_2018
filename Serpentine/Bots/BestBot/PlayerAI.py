@@ -7,6 +7,7 @@ from PythonClientAPI.game.PathFinder import PathFinder
 from PythonClientAPI.structures.Collections import PriorityQueue, Queue
 
 import numpy as np 
+import random
 
 class PlayerAI:
 
@@ -17,6 +18,7 @@ class PlayerAI:
         self.outbound = True
         self.idle = False
         self.move = None
+        self.randomized_directions = None
 
         # store the inputs every cycle
         self.world = None
@@ -29,8 +31,8 @@ class PlayerAI:
         self.map_edges = None
 
         # constants used in decision making
-        self.expansion_depth = 5
-        self.attack_range = 2
+        self.expansion_depth = 3
+        self.attack_range = 4
         self.early_game = True
         self.death_buffer = 3
         self.early_game_turn_limit = 17
@@ -69,6 +71,52 @@ class PlayerAI:
         self.map_edges = [(x, y) for x in range(1, self.width-1) for y in range(1, self.height-1) \
                                   if self.world.is_edge((x,y))]
 
+        self.randomized_directions = Direction.ORDERED_DIRECTIONS
+
+    def random_shortest_path(self, start, end, avoid):
+            """ Refactoring of provided get_shortest_path function to give a random route rather than straight line
+            """
+            if start == end: return [end]
+            if self.world.is_wall(start) or self.world.is_wall(end): return None
+
+            queue = PriorityQueue()
+
+            queue.add(start, 0)
+
+            inverted_tree = {}
+            movement_costs = {}
+
+            inverted_tree[start] = None
+            movement_costs[start] = 0
+
+            while not queue.is_empty():
+                current = queue.poll()
+
+                neighbours = self.world.get_neighbours(current)
+                random.shuffle(self.randomized_directions)
+                for direction in self.randomized_directions:
+                    neighbour = neighbours[direction]
+                    if self.world.is_wall(neighbour) or (avoid and (neighbour in avoid)):
+                        continue
+                    cost = movement_costs[current] + 1
+                    if (neighbour not in movement_costs) or (cost < movement_costs[neighbour]):
+                        movement_costs[neighbour] = cost
+                        queue.add(neighbour,
+                                  cost + self.world.path.get_taxi_cab_distance(neighbour, end))
+                        inverted_tree[neighbour] = current
+
+                if current == end:
+                    path = []
+                    cursor = end
+                    peek_cursor = inverted_tree[cursor]
+                    while peek_cursor:
+                        path.append(cursor)
+                        cursor = peek_cursor
+                        peek_cursor = inverted_tree[cursor]
+                    path.reverse()
+                    return path
+
+            return None
 
     def my_get_shortest_path(self, start, end, avoid):
         """ Refactoring of provided get_shortest_path function to prioritize going in a certain direction
@@ -159,6 +207,13 @@ class PlayerAI:
         return sorted(self.world.util.get_friendly_territory_edges(), 
                       key = lambda x : self.world.path.get_taxi_cab_distance(x.position, self.friendly_unit.position))
 
+    def get_capturable_territory_ranking(self, avoid):
+        ''' returns a list of friendly territory positions, from closest to farthest
+        '''
+        capturable = [tile for tile in self.world.position_to_tile_map.values() if tile.is_neutral]
+        return sorted(capturable, 
+                      key = lambda x : self.world.path.get_taxi_cab_distance(x.position, self.friendly_unit.position))
+
     def get_min_turns_until_killed(self):
         ''' calculates the number of turns that it will take for an enemy to kill friendly snake
         '''
@@ -178,7 +233,7 @@ class PlayerAI:
             if self.friendly_unit.position == self.target.position and self.outbound:
                 self.outbound = False
                 edge_ranking = self.get_territory_edge_ranking()
-                self.target = edge_ranking[3]
+                self.target = edge_ranking[self.expansion_depth]
                 self.idle = False
 
             # Just returned to friendly territory, should find more space to explore
@@ -192,6 +247,7 @@ class PlayerAI:
                                   if not self.world.position_to_tile_map[p].is_friendly] + [pos]
                     temp = avoid
                 self.outbound = True
+                # self.target = self.get_capturable_territory_ranking(avoid + self.map_edges)[self.expansion_depth]
                 self.target = self.world.util.get_closest_capturable_territory_from(self.friendly_unit.position, avoid + self.map_edges)
                 self.idle = False
 
@@ -240,7 +296,8 @@ class PlayerAI:
             else:
                 print('Expanding....')
                 self.outbound = True
-                inc = self.early_game_incs[0] if int(self.turn_count / 2) % 2 else self.early_game_incs[1]
+                # inc = self.early_game_incs[0] if int(self.turn_count / 2) % 2 else self.early_game_incs[1]
+                inc = self.early_game_incs[1] if (self.turn_count < self.early_game_turn_limit/2) else self.early_game_incs[0]
                 self.target = self.world.position_to_tile_map[add_points(self.friendly_unit.position, inc)]
 
     def kill_enemy(self):
@@ -300,7 +357,8 @@ class PlayerAI:
             next_move = self.my_get_shortest_path(self.friendly_unit.position, self.target.position, self.friendly_unit.snake)
             if not next_move:
                 print('Path finding failed, resorting to default move...')
-                next_move = self.my_get_shortest_path(self.friendly_unit.position, self.early_game_incs[2], self.friendly_unit.snake)
+                next_point = add_points(self.friendly_unit, self.early_game_incs[2])
+                # next_move = self.my_get_shortest_path(self.friendly_unit.position, self.early_game_incs[2], self.friendly_unit.snake)
 
         else:
             # if enemy body is near us, abort current task and kill!
@@ -313,14 +371,14 @@ class PlayerAI:
             self.general_expansion()
 
             # print (self.friendly_unit.position, self.target.position, self.outbound, self.idle)
-            next_move = self.world.path.get_shortest_path(self.friendly_unit.position, self.target.position, self.friendly_unit.snake)
+            next_move = self.random_shortest_path(self.friendly_unit.position, self.target.position, self.friendly_unit.snake)
 
             # somtimes an empty list is given from shortest path finder...
             if not next_move:
                 print('Path finding failed, resorting to default move...')
-                next_move = self.world.path.get_shortest_path(self.friendly_unit.position,
-                                                                self.world.util.get_closest_friendly_territory_from(self.friendly_unit.position),
-                                                                self.friendly_unit.snake)
+                next_move = self.random_shortest_path(self.friendly_unit.position,
+                                                        self.world.util.get_closest_friendly_territory_from(self.friendly_unit.position, None).position,
+                                                        self.friendly_unit.snake)
         self.friendly_unit.move(next_move[0])
 
         self.print_log()
